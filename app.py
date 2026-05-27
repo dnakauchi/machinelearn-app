@@ -1,10 +1,14 @@
+import io
+import platform
 import warnings
 
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
 import streamlit as st
+import joblib
 from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 from sklearn.linear_model import Lasso, LinearRegression, Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
@@ -12,52 +16,80 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVR
 
+# ── Japanese font fix ─────────────────────────────────────────────────────────
+_FONTS = {"Windows": "MS Gothic", "Darwin": "Hiragino Sans", "Linux": "IPAexGothic"}
+matplotlib.rcParams["font.family"] = _FONTS.get(platform.system(), "sans-serif")
+matplotlib.rcParams["axes.unicode_minus"] = False
+
 warnings.filterwarnings("ignore")
 
 st.set_page_config(page_title="ML モデル作成アプリ", layout="wide")
 
 ALGORITHMS = {
-    "線形回帰": lambda: LinearRegression(),
-    "リッジ回帰": lambda: Ridge(),
-    "ラッソ回帰": lambda: Lasso(),
+    "線形回帰":        lambda: LinearRegression(),
+    "リッジ回帰":      lambda: Ridge(),
+    "ラッソ回帰":      lambda: Lasso(),
     "ランダムフォレスト": lambda: RandomForestRegressor(n_estimators=100, random_state=42),
     "勾配ブースティング": lambda: GradientBoostingRegressor(random_state=42),
     "サポートベクター回帰": lambda: SVR(),
 }
-
 SVR_NAME = "サポートベクター回帰"
 
 
-def load_excel(file) -> pd.DataFrame:
+# ── Data loading ──────────────────────────────────────────────────────────────
+
+@st.cache_data
+def load_file(file) -> pd.DataFrame:
+    name = file.name.lower()
+    if name.endswith(".csv"):
+        for enc in ("utf-8-sig", "utf-8", "shift-jis", "cp932"):
+            try:
+                file.seek(0)
+                return pd.read_csv(file, encoding=enc)
+            except (UnicodeDecodeError, Exception):
+                continue
+        file.seek(0)
+        return pd.read_csv(file, encoding="utf-8", errors="replace")
     return pd.read_excel(file)
 
 
-def evaluate_model(model, X_train, X_test, y_train, y_test, scaled=False):
+# ── Model training ────────────────────────────────────────────────────────────
+
+def train_model(name, X_train, X_test, y_train, y_test):
+    """Returns metrics dict, y_pred array, fitted model, and scaler (or None)."""
+    model = ALGORITHMS[name]()
     scaler = None
-    if scaled:
+    Xtr, Xte = X_train.copy(), X_test.copy()
+
+    if name == SVR_NAME:
         scaler = StandardScaler()
-        X_train = scaler.fit_transform(X_train)
-        X_test = scaler.transform(X_test)
+        Xtr = scaler.fit_transform(Xtr)
+        Xte = scaler.transform(Xte)
 
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
+    model.fit(Xtr, y_train)
+    y_pred = model.predict(Xte)
 
-    return {
-        "R²": round(r2_score(y_test, y_pred), 4),
+    metrics = {
+        "R²":   round(r2_score(y_test, y_pred), 4),
         "RMSE": round(np.sqrt(mean_squared_error(y_test, y_pred)), 4),
-        "MAE": round(mean_absolute_error(y_test, y_pred), 4),
-    }, y_pred
+        "MAE":  round(mean_absolute_error(y_test, y_pred), 4),
+    }
+    return metrics, y_pred, model, scaler
 
+
+# ── Plotting ──────────────────────────────────────────────────────────────────
 
 def plot_pred_vs_actual(y_test, y_pred, title: str):
     fig, ax = plt.subplots(figsize=(4, 4))
-    ax.scatter(y_test, y_pred, alpha=0.6, s=20, color="steelblue")
-    lo = min(float(y_test.min()), float(y_pred.min()))
-    hi = max(float(y_test.max()), float(y_pred.max()))
-    ax.plot([lo, hi], [lo, hi], "r--", linewidth=1)
+    ax.scatter(y_test, y_pred, alpha=0.6, s=20,
+               color="steelblue", label="予測値")
+    lo = min(float(np.min(y_test)), float(np.min(y_pred)))
+    hi = max(float(np.max(y_test)), float(np.max(y_pred)))
+    ax.plot([lo, hi], [lo, hi], "r--", linewidth=1.5, label="完全予測線")
     ax.set_xlabel("実際の値")
     ax.set_ylabel("予測値")
-    ax.set_title(title, fontsize=10)
+    ax.set_title(title, fontsize=9)
+    ax.legend(fontsize=8)
     fig.tight_layout()
     return fig
 
@@ -65,26 +97,47 @@ def plot_pred_vs_actual(y_test, y_pred, title: str):
 def plot_correlation_matrix(df: pd.DataFrame, cols: list):
     corr = df[cols].corr()
     size = max(6, len(cols))
-    fig, ax = plt.subplots(figsize=(size, size - 1))
-    sns.heatmap(corr, annot=True, fmt=".2f", cmap="coolwarm", center=0,
-                square=True, ax=ax, annot_kws={"size": 8})
+    fig, ax = plt.subplots(figsize=(size, max(4, size - 1)))
+    sns.heatmap(corr, annot=True, fmt=".2f", cmap="coolwarm",
+                center=0, square=True, ax=ax, annot_kws={"size": 8})
     ax.set_title("相関行列", fontsize=12)
     fig.tight_layout()
     return fig
 
 
+# ── Model serialization ───────────────────────────────────────────────────────
+
+def to_bytes(model, scaler, feature_cols: list, target_col: str) -> bytes:
+    buf = io.BytesIO()
+    joblib.dump({
+        "model":        model,
+        "scaler":       scaler,
+        "feature_cols": feature_cols,
+        "target_col":   target_col,
+    }, buf)
+    buf.seek(0)
+    return buf.read()
+
+
+def highlight_best(s):
+    return ["background-color: #d4edda" if i == 0 else "" for i in range(len(s))]
+
+
 # ── UI ────────────────────────────────────────────────────────────────────────
 
 st.title("機械学習モデル作成アプリ")
-st.caption("Excel ファイルをアップロードするだけで、複数の機械学習モデルを比較・評価できます。")
+st.caption("Excel / CSV をアップロードするだけで複数の機械学習モデルを比較・評価できます。")
 
-uploaded_file = st.file_uploader("Excel ファイルをアップロード (.xlsx / .xls)", type=["xlsx", "xls"])
+uploaded_file = st.file_uploader(
+    "ファイルをアップロード (.xlsx / .xls / .csv)",
+    type=["xlsx", "xls", "csv"],
+)
 
 if not uploaded_file:
-    st.info("まず Excel ファイルをアップロードしてください。")
+    st.info("まず Excel または CSV ファイルをアップロードしてください。")
     st.stop()
 
-df = load_excel(uploaded_file)
+df = load_file(uploaded_file)
 
 st.subheader("データプレビュー")
 st.dataframe(df.head(10), use_container_width=True)
@@ -95,19 +148,27 @@ if len(numeric_cols) < 2:
     st.error("数値列が 2 列以上必要です。")
     st.stop()
 
+# ── Variable selection ────────────────────────────────────────────────────────
+
 st.subheader("変数の設定")
 col_left, col_right = st.columns(2)
 
 with col_left:
-    target_col = st.selectbox("被説明変数（目的変数）", numeric_cols)
+    target_cols = st.multiselect(
+        "被説明変数（目的変数）※複数選択可",
+        options=numeric_cols,
+        default=[numeric_cols[-1]],
+    )
 
 with col_right:
-    default_features = [c for c in numeric_cols if c != target_col]
+    available_features = [c for c in numeric_cols if c not in target_cols]
     feature_cols = st.multiselect(
         "説明変数（特徴量）",
-        options=default_features,
-        default=default_features,
+        options=available_features,
+        default=available_features,
     )
+
+# ── Algorithm & split settings ────────────────────────────────────────────────
 
 st.subheader("アルゴリズムと学習設定")
 col_algo, col_split = st.columns([3, 1])
@@ -120,75 +181,128 @@ with col_algo:
     )
 
 with col_split:
-    test_size = st.slider("テストデータ割合", min_value=0.1, max_value=0.4,
-                          value=0.2, step=0.05, format="%.0f%%",
-                          help="全データのうちモデル評価に使う割合")
+    test_size_pct = st.slider(
+        "テストデータ割合",
+        min_value=10, max_value=40, value=20, step=5,
+        format="%d%%",
+        help="全データのうちモデル評価に使う割合",
+    )
+    test_size = test_size_pct / 100
 
-run = st.button("モデルを作成・評価", type="primary",
-                disabled=not (feature_cols and selected_algos))
+can_run = bool(target_cols and feature_cols and selected_algos)
+run = st.button("モデルを作成・評価", type="primary", disabled=not can_run)
 
 if not run:
     st.stop()
 
-# ── Training ──────────────────────────────────────────────────────────────────
+# ── Training loop (one section per target variable) ───────────────────────────
 
-data = df[feature_cols + [target_col]].dropna()
+all_cols = list(dict.fromkeys(feature_cols + target_cols))
+data = df[all_cols].dropna()
 if len(data) < 10:
     st.error("欠損除去後のデータが少なすぎます（10 行以上必要）。")
     st.stop()
 
 X = data[feature_cols]
-y = data[target_col]
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=test_size, random_state=42
-)
 
-results = []
-predictions: dict[str, np.ndarray] = {}
-
-progress = st.progress(0, text="学習中...")
-for i, name in enumerate(selected_algos):
-    progress.progress((i + 1) / len(selected_algos), text=f"{name} を学習中...")
-    model = ALGORITHMS[name]()
-    metrics, y_pred = evaluate_model(
-        model, X_train, X_test, y_train, y_test,
-        scaled=(name == SVR_NAME),
+for target_col in target_cols:
+    y = data[target_col]
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=42
     )
-    results.append({"アルゴリズム": name, **metrics})
-    predictions[name] = y_pred
 
-progress.empty()
+    st.markdown("---")
+    st.markdown(f"## 目的変数: **{target_col}**")
 
-# ── Results ───────────────────────────────────────────────────────────────────
+    results = []
+    predictions: dict[str, np.ndarray] = {}
+    trained: dict[str, tuple] = {}   # name -> (model, scaler)
 
-st.subheader("モデルスコア比較")
-results_df = pd.DataFrame(results).sort_values("R²", ascending=False).reset_index(drop=True)
-best = results_df.iloc[0]
-st.success(f"最良モデル: **{best['アルゴリズム']}**　R² = {best['R²']}")
+    progress = st.progress(0, text=f"[{target_col}] 学習中...")
+    for i, name in enumerate(selected_algos):
+        progress.progress(
+            (i + 1) / len(selected_algos),
+            text=f"[{target_col}] {name} を学習中...",
+        )
+        metrics, y_pred, model, scaler = train_model(
+            name, X_train, X_test, y_train, y_test
+        )
+        results.append({"アルゴリズム": name, **metrics})
+        predictions[name] = y_pred
+        trained[name] = (model, scaler)
 
-def highlight_best(s):
-    return ["background-color: #d4edda" if i == 0 else "" for i in range(len(s))]
+    progress.empty()
 
-st.dataframe(
-    results_df.style.apply(highlight_best, axis=0),
-    use_container_width=True,
-    hide_index=True,
-)
+    # Scores table
+    st.subheader("モデルスコア比較")
+    results_df = (
+        pd.DataFrame(results)
+        .sort_values("R²", ascending=False)
+        .reset_index(drop=True)
+    )
+    best = results_df.iloc[0]
+    st.success(f"最良モデル: **{best['アルゴリズム']}**　R² = {best['R²']}")
+    st.dataframe(
+        results_df.style.apply(highlight_best, axis=0),
+        use_container_width=True,
+        hide_index=True,
+    )
 
-# ── Predicted vs Actual ───────────────────────────────────────────────────────
+    # Predicted vs actual plots
+    st.subheader("予測値 vs 実際の値")
+    n_cols = min(len(selected_algos), 3)
+    plot_cols = st.columns(n_cols)
+    for i, name in enumerate(selected_algos):
+        with plot_cols[i % n_cols]:
+            fig = plot_pred_vs_actual(
+                y_test.values, predictions[name],
+                f"{name}\n({target_col})",
+            )
+            st.pyplot(fig)
+            plt.close(fig)
 
-st.subheader("予測値 vs 実際の値")
-n_cols = min(len(selected_algos), 3)
-cols = st.columns(n_cols)
-for i, name in enumerate(selected_algos):
-    with cols[i % n_cols]:
-        fig = plot_pred_vs_actual(y_test.values, predictions[name], name)
-        st.pyplot(fig)
-        plt.close(fig)
+    # Model download
+    st.subheader("学習済みモデルのダウンロード")
+    st.caption("ダウンロードした `.joblib` ファイルは `joblib.load()` で読み込めます。")
 
-# ── Correlation Matrix ────────────────────────────────────────────────────────
+    dl_cols = st.columns(min(len(selected_algos), 3))
+    for i, name in enumerate(selected_algos):
+        model, scaler = trained[name]
+        model_bytes = to_bytes(model, scaler, feature_cols, target_col)
+        safe = lambda s: s.replace("/", "_").replace(" ", "_")
+        filename = f"model__{safe(target_col)}__{safe(name)}.joblib"
+        with dl_cols[i % 3]:
+            st.download_button(
+                label=f"⬇ {name}",
+                data=model_bytes,
+                file_name=filename,
+                mime="application/octet-stream",
+                key=f"dl_{target_col}_{name}",
+            )
 
+    with st.expander("モデルの使い方（コード例）"):
+        st.code(
+            f"""import joblib
+import pandas as pd
+
+# モデルを読み込む
+obj = joblib.load("model__{safe(target_col)}__{safe(best['アルゴリズム'])}.joblib")
+model  = obj["model"]
+scaler = obj["scaler"]   # SVR 以外は None
+
+# 新しいデータで予測
+X_new = pd.DataFrame([{{ col: 値 for col in {feature_cols} }}])
+if scaler:
+    X_new = scaler.transform(X_new)
+pred = model.predict(X_new)
+print(pred)
+""",
+            language="python",
+        )
+
+# Correlation matrix (once, covering all selected columns)
+st.markdown("---")
 st.subheader("相関行列")
-fig = plot_correlation_matrix(data, feature_cols + [target_col])
+fig = plot_correlation_matrix(data, feature_cols + target_cols)
 st.pyplot(fig)
 plt.close(fig)
