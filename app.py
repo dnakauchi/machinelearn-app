@@ -12,6 +12,7 @@ import joblib
 from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 from sklearn.linear_model import Lasso, LinearRegression, Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.inspection import permutation_importance
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVR
@@ -90,6 +91,47 @@ def plot_pred_vs_actual(y_test, y_pred, title: str):
     ax.set_ylabel("予測値")
     ax.set_title(title, fontsize=9)
     ax.legend(fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def get_feature_importance(
+    name: str, model, scaler, X_test: pd.DataFrame, y_test: pd.Series, feature_cols: list
+) -> tuple[pd.Series, str]:
+    """
+    Returns (importance_series, kind).
+    kind: 'coef' for linear models, 'importance' for tree models, 'permutation' for SVR.
+    Linear models return signed coefficients; others return non-negative values.
+    """
+    if name in ("線形回帰", "リッジ回帰", "ラッソ回帰"):
+        return pd.Series(model.coef_, index=feature_cols), "coef"
+
+    if name in ("ランダムフォレスト", "勾配ブースティング"):
+        return pd.Series(model.feature_importances_, index=feature_cols), "importance"
+
+    # SVR — use permutation importance on scaled data
+    Xte = scaler.transform(X_test) if scaler is not None else X_test.values
+    result = permutation_importance(model, Xte, y_test, n_repeats=10, random_state=42)
+    return pd.Series(result.importances_mean, index=feature_cols), "permutation"
+
+
+def plot_feature_importance(series: pd.Series, title: str, kind: str):
+    sorted_s = series.reindex(series.abs().sort_values().index)
+    colors = ["tomato" if v < 0 else "steelblue" for v in sorted_s]
+    height = max(3.0, len(series) * 0.45)
+
+    fig, ax = plt.subplots(figsize=(5, height))
+    ax.barh(sorted_s.index, sorted_s.values, color=colors)
+    ax.axvline(0, color="black", linewidth=0.8)
+
+    if kind == "coef":
+        ax.set_xlabel("係数  (正: 正の影響 / 負: 負の影響)")
+    elif kind == "importance":
+        ax.set_xlabel("重要度（不純度減少量）")
+    else:
+        ax.set_xlabel("置換重要度（スコア低下量）")
+
+    ax.set_title(title, fontsize=9)
     fig.tight_layout()
     return fig
 
@@ -257,6 +299,27 @@ for target_col in target_cols:
             fig = plot_pred_vs_actual(
                 y_test.values, predictions[name],
                 f"{name}\n({target_col})",
+            )
+            st.pyplot(fig)
+            plt.close(fig)
+
+    # Feature importance
+    st.subheader("説明変数の寄与度")
+    fi_note = {
+        "coef":        "係数の大きさ（絶対値が大きいほど影響大。正負で方向を示す）",
+        "importance":  "不純度に基づく重要度（値が大きいほど予測に貢献）",
+        "permutation": "置換重要度（その変数をシャッフルしたときのスコア低下量）",
+    }
+    fi_cols = st.columns(min(len(selected_algos), 3))
+    for i, name in enumerate(selected_algos):
+        model, scaler = trained[name]
+        imp_series, kind = get_feature_importance(
+            name, model, scaler, X_test, y_test, feature_cols
+        )
+        with fi_cols[i % 3]:
+            st.caption(fi_note[kind])
+            fig = plot_feature_importance(
+                imp_series, f"{name}\n({target_col})", kind
             )
             st.pyplot(fig)
             plt.close(fig)
