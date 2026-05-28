@@ -147,6 +147,23 @@ def plot_correlation_matrix(df: pd.DataFrame, cols: list):
     return fig
 
 
+def plot_pairplot(df: pd.DataFrame, cols: list):
+    """Create a scatter plot matrix of all variables."""
+    from pandas.plotting import scatter_matrix
+
+    n = len(cols)
+    size_per_plot = 1.2
+    fig_size = (n * size_per_plot, n * size_per_plot)
+
+    _, axes = scatter_matrix(df[cols], figsize=fig_size, s=30, alpha=0.5)
+
+    # Adjust title
+    fig = axes[0, 0].get_figure()
+    fig.suptitle("変数間の分布図行列", y=0.995, fontsize=12)
+    fig.tight_layout()
+    return fig
+
+
 # ── Model serialization ───────────────────────────────────────────────────────
 
 def to_bytes(model, scaler, feature_cols: list, target_col: str) -> bytes:
@@ -203,9 +220,10 @@ with col_left:
     )
 
 with col_right:
+    st.markdown("<span style='color: #0066CC;'>**説明変数（特徴量）**</span>", unsafe_allow_html=True)
     available_features = [c for c in numeric_cols if c not in target_cols]
     feature_cols = st.multiselect(
-        "説明変数（特徴量）",
+        "変数を選択",
         options=available_features,
         default=available_features,
     )
@@ -369,3 +387,15 @@ st.subheader("相関行列")
 fig = plot_correlation_matrix(data, feature_cols + target_cols)
 st.pyplot(fig)
 plt.close(fig)
+
+# Pairplot (distribution matrix)
+st.subheader("変数間の分布図行列")
+if len(feature_cols + target_cols) <= 8:
+    fig = plot_pairplot(data, feature_cols + target_cols)
+    st.pyplot(fig)
+    plt.close(fig)
+else:
+    st.info(
+        "変数が多すぎるため分布図行列を表示できません。"
+        "説明変数の数を減らすか、特定の変数組み合わせを選択してください。"
+    )
