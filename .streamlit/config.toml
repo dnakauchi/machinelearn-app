@@ -7,12 +7,10 @@ font = "sans serif"
 
 [client]
 showErrorDetails = false
-maxUploadSize = 200
 
 [server]
 maxUploadSize = 200
 enableXsrfProtection = true
-enableCORS = false
 headless = true
 
 [logger]
@@ -20,3 +18,4 @@ level = "info"
 
 [runner]
 magicEnabled = true
+
