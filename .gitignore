@@ -60,3 +60,8 @@ logs/
 .coverage
 htmlcov/
 .pytest_cache/
+
+# Streamlit
+.streamlit/secrets.toml
+.streamlit/secrets.local.toml
+*.joblib
