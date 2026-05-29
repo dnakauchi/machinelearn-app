@@ -1,5 +1,4 @@
 import io
-import platform
 import warnings
 from datetime import timedelta
 
@@ -10,6 +9,8 @@ import pandas as pd
 import seaborn as sns
 import streamlit as st
 import joblib
+import japanize_matplotlib
+
 from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 from sklearn.linear_model import Lasso, LinearRegression, Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
@@ -19,8 +20,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVR
 
 # ── Japanese font fix ─────────────────────────────────────────────────────────
-_FONTS = {"Windows": "MS Gothic", "Darwin": "Hiragino Sans", "Linux": "IPAexGothic"}
-matplotlib.rcParams["font.family"] = _FONTS.get(platform.system(), "sans-serif")
+# japanize-matplotlib が自動的にフォントを設定します
 matplotlib.rcParams["axes.unicode_minus"] = False
 
 warnings.filterwarnings("ignore")
