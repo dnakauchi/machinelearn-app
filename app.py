@@ -1,6 +1,7 @@
 import io
 import platform
 import warnings
+from datetime import timedelta
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -39,7 +40,7 @@ SVR_NAME = "サポートベクター回帰"
 
 # ── Data loading ──────────────────────────────────────────────────────────────
 
-@st.cache_data
+@st.cache_data(ttl=timedelta(minutes=5))
 def load_file(file) -> pd.DataFrame:
     name = file.name.lower()
     if name.endswith(".csv"):
